@@ -62,6 +62,11 @@ SYSTEM_PROMPT = (
     "Keep your tone friendly and empathetic."
 )
 
+@app.get("/", tags=["health"])
+def healthcheck():
+    return {"status":"ok"}
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
     # 1) Si no hay historial, devolvemos sólo el saludo inicial (en español)
