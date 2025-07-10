@@ -1,27 +1,36 @@
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
-from transformers import pipeline
+import os
 from deep_translator import GoogleTranslator
+from huggingface_hub import InferenceClient
+
+client = InferenceClient(token=os.environ["HF_TOKEN"])
+def chat_with_hf(prompt: str) -> str:
+    resp = client.text_generation(
+        model="facebook/blenderbot-400M-distill",
+        inputs=prompt,
+        parameters={"max_new_tokens": 150, "temperature": 0.7}
+    )
+    return resp.generated_text
 
 # Traducción
 translator = GoogleTranslator(source='es', target='en')
 translator_back = GoogleTranslator(source='en', target='es')
 
-# Pipelines en inglés
-chatbot = pipeline(
-    "text2text-generation",
-    model="facebook/blenderbot-400M-distill"
-)
-emotion = pipeline(
-    "text-classification",
-    model="j-hartmann/emotion-english-distilroberta-base"
-)
-
-# Clasificador zero-shot para “anxiety”
-anxiety_detector = pipeline(
-    "zero-shot-classification",
-    model="facebook/bart-large-mnli"
-)
+# En lugar de pipeline, reutiliza el mismo InferenceClient:
+def detect_anxiety(text: str) -> float:
+    # zero-shot classification via inference API
+    resp = client.zero_shot_classification(
+      model="facebook/bart-large-mnli",
+      inputs=text,
+      parameters={
+        "candidate_labels": ["anxiety"],
+        "multi_label": False
+      }
+    )
+    # resp["scores"] y resp["labels"]
+    idx = resp["labels"].index("anxiety")
+    return float(resp["scores"][idx])
 
 app = FastAPI(
     title="MindMend IA Service",
@@ -82,15 +91,8 @@ def chat(req: ChatRequest):
         "Assistant:"
     ])
 
-    # 5) Generamos la respuesta en inglés
-    en_reply = chatbot(
-        prompt,
-        truncation=True,        # <— trunca el prompt a max_input_length del tokenizer
-        max_length=128,         # <— tope para la tokenización
-        max_new_tokens=150,     # <— longitud de la respuesta generada
-        do_sample=True,
-        temperature=0.7
-    )[0]["generated_text"]
+    # 5) Generamos la respuesta en inglés vía HF Inference API
+    en_reply = chat_with_hf(prompt)
 
     # 6) Traducimos EN → ES y devolvemos
     es_reply = translator_back.translate(en_reply)
@@ -98,18 +100,7 @@ def chat(req: ChatRequest):
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest):
-    # 1) Unimos toda la conversación
     full_es = " ".join(req.messages)
-    # 2) Traducimos ES→EN
     full_en = translator.translate(full_es)
-
-    # 3) Clasificamos con zero-shot para “anxiety”
-    res = anxiety_detector(full_en,
-                            candidate_labels=["anxiety"],
-                            multi_label=False)
-
-    # 4) Devolvemos la puntuación (score) de “anxiety”
-    return AnalyzeResponse(
-        label="ansiedad",
-        score=float(res["scores"][res["labels"].index("anxiety")])
-    )
+    score = detect_anxiety(full_en)
+    return AnalyzeResponse(label="ansiedad", score=score)
