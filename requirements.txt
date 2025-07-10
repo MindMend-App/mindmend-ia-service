@@ -1,5 +1,5 @@
 transformers
-torch
+torch==2.7.1
 fastapi
 uvicorn[standard]
 deep-translator
