@@ -1,23 +1,20 @@
-# 1) Imagen base ligera
+# Dockerfile
 FROM python:3.12-slim
 
-ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
-# 2) Copiamos solo requirements
+# 1) Copiamos sólo requirements.txt
 COPY requirements.txt .
 
-# 3) Primero instalamos torch CPU-only
+# 2) Instalamos torch CPU primero (para que no tire la versión CUDA),
+#    y justo después el resto de las deps
 RUN pip install --no-cache-dir \
       torch==2.7.1+cpu \
-      -f https://download.pytorch.org/whl/cpu/torch_stable.html
+      -f https://download.pytorch.org/whl/cpu/torch_stable.html \
+    && pip install --no-cache-dir -r requirements.txt
 
-# 4) Luego el resto de dependencias
-RUN pip install --no-cache-dir -r requirements.txt
-
-# 5) Copiamos el resto de la app
+# 3) Copiamos el resto del código
 COPY . .
 
-EXPOSE 8000
-
+# 4) Comando de arranque
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
