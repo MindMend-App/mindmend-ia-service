@@ -1,5 +1,4 @@
 fastapi
 uvicorn
 transformers
-torch==2.7.1     # versión CPU-only
 deep-translator
