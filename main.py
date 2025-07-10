@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from transformers import pipeline
 from deep_translator import GoogleTranslator
 
@@ -17,6 +17,12 @@ emotion = pipeline(
     model="j-hartmann/emotion-english-distilroberta-base"
 )
 
+# Clasificador zero-shot para “anxiety”
+anxiety_detector = pipeline(
+    "zero-shot-classification",
+    model="facebook/bart-large-mnli"
+)
+
 app = FastAPI(
     title="MindMend IA Service",
     description="Microservicio con traducción y conversación enfocada en ansiedad",
@@ -25,6 +31,10 @@ app = FastAPI(
 
 class ChatRequest(BaseModel):
     message: str
+    history: list[str] = Field(
+        default_factory=list,
+        description="Todos los mensajes (del bot y del usuario) hasta ahora, en orden"
+    )
 
 class ChatResponse(BaseModel):
     reply: str
@@ -45,37 +55,61 @@ SYSTEM_PROMPT = (
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    # Si no hay mensaje del usuario, el bot debe iniciar la charla:
-    if not req.message.strip():
-        # Directamente formulamos la primera pregunta en español:
-        first_q = (
+    # 1) Si no hay historial, devolvemos sólo el saludo inicial (en español)
+    if not req.history:
+        greeting = (
             "¡Hola! Soy MindMend, tu asistente de apoyo emocional. "
             "¿Cómo te sientes hoy? ¿Hay algo que te esté preocupando últimamente?"
         )
-        return ChatResponse(reply=first_q)
+        return ChatResponse(reply=greeting)
 
-    # 1) Traducimos ES→EN
+    # 2) Traducimos ES → EN
     en_input = translator.translate(req.message)
 
-    # 2) Construimos el prompt completo en inglés:
-    prompt = (
-        SYSTEM_PROMPT
-        + "\nUser: " + en_input
-        + "\nAssistant:"
+    # 3) Reconstruimos la conversación en inglés:
+    #    turnamos cada elemento de history (en español) a inglés
+    history_en = [translator.translate(msg) for msg in req.history]
+    convo_en = "\n".join(
+        f"{'User' if i % 2 else 'Assistant'}: {txt}"
+        for i, txt in enumerate(history_en)
     )
 
-    # 3) Generamos la respuesta en inglés
-    en_reply = chatbot(prompt, max_length=150, do_sample=True, temperature=0.7)[0]["generated_text"]
+    # 4) Montamos el prompt completo
+    prompt = "\n".join([
+        SYSTEM_PROMPT,
+        convo_en,
+        f"User: {en_input}",
+        "Assistant:"
+    ])
 
-    # 4) Traducimos EN→ES
+    # 5) Generamos la respuesta en inglés
+    en_reply = chatbot(
+        prompt,
+        truncation=True,        # <— trunca el prompt a max_input_length del tokenizer
+        max_length=128,         # <— tope para la tokenización
+        max_new_tokens=150,     # <— longitud de la respuesta generada
+        do_sample=True,
+        temperature=0.7
+    )[0]["generated_text"]
+
+    # 6) Traducimos EN → ES y devolvemos
     es_reply = translator_back.translate(en_reply)
-
     return ChatResponse(reply=es_reply)
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest):
+    # 1) Unimos toda la conversación
     full_es = " ".join(req.messages)
+    # 2) Traducimos ES→EN
     full_en = translator.translate(full_es)
-    res = emotion(full_en)[0]
-    label_es = translator_back.translate(res["label"])
-    return AnalyzeResponse(label=label_es, score=float(res["score"]))
+
+    # 3) Clasificamos con zero-shot para “anxiety”
+    res = anxiety_detector(full_en,
+                            candidate_labels=["anxiety"],
+                            multi_label=False)
+
+    # 4) Devolvemos la puntuación (score) de “anxiety”
+    return AnalyzeResponse(
+        label="ansiedad",
+        score=float(res["scores"][res["labels"].index("anxiety")])
+    )
