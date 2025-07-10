@@ -1,20 +1,23 @@
-# Dockerfile
+# 1) Base ligera
 FROM python:3.12-slim
 
+# 2) Directorio de trabajo
 WORKDIR /app
 
-# 1) Copiamos sólo requirements.txt
+# 3) Copiamos sólo requirements
 COPY requirements.txt .
 
-# 2) Instalamos torch CPU primero (para que no tire la versión CUDA),
-#    y justo después el resto de las deps
+# 4) Instalamos torch-CPU + resto de deps
 RUN pip install --no-cache-dir \
       torch==2.7.1+cpu \
       -f https://download.pytorch.org/whl/cpu/torch_stable.html \
     && pip install --no-cache-dir -r requirements.txt
 
-# 3) Copiamos el resto del código
+# 5) Copiamos el código
 COPY . .
 
-# 4) Comando de arranque
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 6) Exponemos el puerto
+EXPOSE 8000
+
+# 7) Comando de arranque, usa la variable $PORT de Railway
+ENTRYPOINT ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
